@@ -581,7 +581,7 @@ class TestRegistration:
         props = entry.schema["parameters"]["properties"]
         assert props["limit"]["minimum"] == 1
         assert props["limit"]["maximum"] == 100
-        assert props["auto_archive_duration"]["enum"] == [60, 1440, 4320, 10080]
+        assert props["auto_archive_duration"]["enum"] == ["60", "1440", "4320", "10080"]
 
     def test_core_schema_description(self):
         """Core schema description should mention core actions."""
