@@ -73,6 +73,3 @@ website/static/api/skills-index.json
 pr_body.md
 implementation_plan.md
 .gemini/
-
-# uv
-uv.lock
