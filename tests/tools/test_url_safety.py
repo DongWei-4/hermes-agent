@@ -208,7 +208,6 @@ class TestIsBlockedIp:
         ip = ipaddress.ip_address(ip_str)
         assert _is_blocked_ip(ip) is False, f"{ip_str} should be allowed"
 
-
 class TestGlobalAllowPrivateUrls:
     """Tests for the security.allow_private_urls config toggle."""
 
@@ -393,3 +392,23 @@ class TestAllowPrivateUrlsIntegration:
         """Empty URLs are still blocked."""
         monkeypatch.setenv("HERMES_ALLOW_PRIVATE_URLS", "true")
         assert is_safe_url("") is False
+
+    @pytest.mark.parametrize("ip_str, safe_networks", [
+        ("192.168.1.10", ["192.168.1.0/24"]),
+        ("10.0.0.5", ["10.0.0.0/8"]),
+        ("172.16.0.5", ["172.16.0.0/16"]),
+        ("198.18.0.23", ["198.18.0.0/15"]),
+        ("127.0.0.1", ["127.0.0.1"]),
+    ])
+    def test_allowed_intranet_ips_via_config(self, ip_str, safe_networks):
+        """Test that IPs configured in network.safe_intranet_ips bypass SSRF checks."""
+        from tools import url_safety
+        ip = ipaddress.ip_address(ip_str)
+        # Clear the cache
+        url_safety._CACHED_SAFE_NETWORKS = None
+
+        with patch("hermes_cli.config.load_config", return_value={"network": {"safe_intranet_ips": safe_networks}}):
+            assert _is_blocked_ip(ip) is False, f"Configured safe IP {ip_str} should be allowed"
+
+        # Clear the cache again to not affect other tests
+        url_safety._CACHED_SAFE_NETWORKS = None

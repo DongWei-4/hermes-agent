@@ -1202,6 +1202,19 @@ web:
 
 **Exa:** Set `EXA_API_KEY` in `~/.hermes/.env`. Supports `category` filtering (`company`, `research paper`, `news`, `people`, `personal site`, `pdf`) and domain/date filters.
 
+## Network
+
+Configure network-level behavior:
+
+```yaml
+network:
+  # List of trusted internal IP ranges or addresses the agent is allowed to access.
+  # Use this if tools like web_extract are unable to access your internal
+  # services (e.g. wiki, local dev servers). Supports IPs and CIDR blocks.
+  safe_intranet_ips:
+    - "198.18.0.0/15"
+```
+
 ## Browser
 
 Configure browser automation behavior:

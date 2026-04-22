@@ -278,6 +278,15 @@ terminal:
 #   tirith_fail_open: true      # Allow commands if tirith unavailable
 
 # =============================================================================
+# Network Configuration
+# =============================================================================
+network:
+  # List of trusted internal IP ranges or addresses the agent is allowed to access.
+  # Use this if tools like web_extract or browser are unable to access your
+  # Examples: ["198.18.0.0/15", "192.168.1.1"]
+  safe_intranet_ips: []
+
+# =============================================================================
 # Browser Tool Configuration
 # =============================================================================
 browser:

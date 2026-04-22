@@ -932,6 +932,10 @@ DEFAULT_CONFIG = {
         # Python tries AAAA records first and hangs for the full TCP timeout
         # before falling back to IPv4.  Set to true to skip IPv6 entirely.
         "force_ipv4": False,
+        # Allowed intranet/private IP ranges that bypass the SSRF protection
+        # in is_safe_url().
+        # Examples: ["198.18.0.0/15", "192.168.1.1"]
+        "safe_intranet_ips": [],
     },
 
     # Session storage — controls automatic cleanup of ~/.hermes/state.db.

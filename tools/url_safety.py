@@ -129,8 +129,38 @@ def _reset_allow_private_cache() -> None:
     _cached_allow_private = False
 
 
+_CACHED_SAFE_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
+
+
+def _get_safe_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Load and cache the safe intranet IP blocks from configuration."""
+    global _CACHED_SAFE_NETWORKS
+    if _CACHED_SAFE_NETWORKS is not None:
+        return _CACHED_SAFE_NETWORKS
+
+    _CACHED_SAFE_NETWORKS = []
+    try:
+        from hermes_cli.config import load_config
+        config = load_config()
+        safe_ips = config.get("network", {}).get("safe_intranet_ips", [])
+        for ip_str in safe_ips:
+            try:
+                _CACHED_SAFE_NETWORKS.append(ipaddress.ip_network(ip_str, strict=False))
+            except ValueError:
+                logger.warning("Invalid IP or CIDR in network.safe_intranet_ips config: %s", ip_str)
+    except Exception as exc:
+        logger.debug("Failed to load network.safe_intranet_ips config: %s", exc)
+
+    return _CACHED_SAFE_NETWORKS
+
+
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True if the IP should be blocked for SSRF protection."""
+    # Check if the IP is in the explicit safe list
+    for safe_net in _get_safe_networks():
+        if ip in safe_net:
+            return False
+
     if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
         return True
     if ip.is_multicast or ip.is_unspecified:
@@ -139,6 +169,7 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if ip in _CGNAT_NETWORK:
         return True
     return False
+
 
 
 def _allows_private_ip_resolution(hostname: str, scheme: str) -> bool:
