@@ -18,6 +18,7 @@ from hermes_cli.models import (
     provider_model_ids,
     validate_requested_model,
 )
+from hermes_constants import HERMES_USER_AGENT
 
 
 # -- helpers -----------------------------------------------------------------
@@ -284,6 +285,31 @@ class TestFetchApiModels:
 
         assert catalog is not None
         assert [item["id"] for item in catalog] == ["gpt-5.4"]
+
+    def test_probe_api_models_sends_user_agent(self):
+        """Verify that probe_api_models includes the HERMES_USER_AGENT."""
+        class _Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"data": []}'
+
+        with patch("hermes_cli.models.urllib.request.urlopen", return_value=_Resp()) as mock_url:
+            probe_api_models("key", "http://localhost:8000")
+            req = mock_url.call_args[0][0]
+            assert req.get_header("User-agent") == HERMES_USER_AGENT
+
+    def test_probe_api_models_no_python_urllib(self):
+        """Ensure the default Python-urllib UA is never sent."""
+        class _Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"data": []}'
+
+        with patch("hermes_cli.models.urllib.request.urlopen", return_value=_Resp()) as mock_url:
+            probe_api_models(None, "http://localhost:8000")
+            ua = mock_url.call_args[0][0].get_header("User-agent")
+            assert ua == HERMES_USER_AGENT
+            assert "Python-urllib" not in (ua or "")
 
 
 class TestGithubReasoningEfforts:

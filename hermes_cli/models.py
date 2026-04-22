@@ -15,6 +15,7 @@ import time
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
+from hermes_constants import HERMES_USER_AGENT
 
 COPILOT_BASE_URL = "https://api.githubcopilot.com"
 COPILOT_MODELS_URL = f"{COPILOT_BASE_URL}/models"
@@ -413,6 +414,7 @@ def fetch_nous_account_tier(access_token: str, portal_base_url: str = "") -> dic
     base = (portal_base_url or "https://portal.nousresearch.com").rstrip("/")
     url = f"{base}/api/oauth/account"
     headers = {
+        "User-Agent": HERMES_USER_AGENT,
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
     }
@@ -678,7 +680,10 @@ def fetch_openrouter_models(
     try:
         req = urllib.request.Request(
             "https://openrouter.ai/api/v1/models",
-            headers={"Accept": "application/json"},
+            headers={
+                "User-Agent": HERMES_USER_AGENT,
+                "Accept": "application/json",
+            },
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode())
@@ -833,7 +838,10 @@ def fetch_models_with_pricing(
         return _pricing_cache[cache_key]
 
     url = cache_key.rstrip("/") + "/v1/models"
-    headers: dict[str, str] = {"Accept": "application/json"}
+    headers: dict[str, str] = {
+        "User-Agent": HERMES_USER_AGENT,
+        "Accept": "application/json",
+    }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -1346,7 +1354,10 @@ def _fetch_anthropic_models(timeout: float = 5.0) -> Optional[list[str]]:
     if not token:
         return None
 
-    headers: dict[str, str] = {"anthropic-version": "2023-06-01"}
+    headers: dict[str, str] = {
+        "User-Agent": HERMES_USER_AGENT,
+        "anthropic-version": "2023-06-01",
+    }
     if _is_oauth_token(token):
         headers["Authorization"] = f"Bearer {token}"
         from agent.anthropic_adapter import _COMMON_BETAS, _OAUTH_ONLY_BETAS
@@ -1397,7 +1408,7 @@ def copilot_default_headers() -> dict[str, str]:
     except ImportError:
         return {
             "Editor-Version": COPILOT_EDITOR_VERSION,
-            "User-Agent": "HermesAgent/1.0",
+            "User-Agent": HERMES_USER_AGENT,
             "Openai-Intent": "conversation-edits",
             "x-initiator": "agent",
         }
@@ -1769,7 +1780,9 @@ def probe_api_models(
         candidates.append((alternate_base, True))
 
     tried: list[str] = []
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {
+        "User-Agent": HERMES_USER_AGENT,
+    }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     if normalized.startswith(COPILOT_BASE_URL):
