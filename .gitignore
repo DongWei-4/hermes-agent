@@ -72,6 +72,7 @@ website/static/api/skills-index.json
 # Scratch and temporary files
 pr_body.md
 implementation_plan.md
-test_probe_ua.py
-scratch/
 .gemini/
+
+# uv
+uv.lock

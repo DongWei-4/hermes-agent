@@ -480,6 +480,22 @@ All URL-capable tools (web search, web extract, vision, browser) validate URLs b
 
 SSRF protection is always active and cannot be disabled. DNS failures are treated as blocked (fail-closed). Redirect chains are re-validated at each hop to prevent redirect-based bypasses.
 
+
+By default, Hermes blocks access to all private/internal network addresses (e.g., `192.168.x.x`, `10.x.x.x`) to prevent security risks. 
+
+If you need the agent to access specific internal services, APIs, or infrastructure (such as an internal wiki, a private code repository, or local development servers) that are being blocked, you can whitelist these trusted ranges in `~/.hermes/config.yaml`:
+
+```yaml
+network:
+  # List of internal IP ranges or addresses the agent is allowed to access
+  safe_intranet_ips:
+    - "192.168.1.50"      # Specific internal server
+    - "10.0.0.0/24"       # Internal subnet
+    - "198.18.0.0/15"     # Trusted infrastructure ranges
+```
+
+Once configured, tools like `web_extract` and `browser_navigate` will be able to connect to these addresses without being rejected by the built-in safety checks.
+
 ### Tirith Pre-Exec Security Scanning
 
 Hermes integrates [tirith](https://github.com/sheeki03/tirith) for content-level command scanning before execution. Tirith detects threats that pattern matching alone misses:

@@ -1199,6 +1199,19 @@ web:
 
 **Parallel search modes:** Set `PARALLEL_SEARCH_MODE` to control search behavior — `fast`, `one-shot`, or `agentic` (default: `agentic`).
 
+## Network
+
+Configure network-level behavior:
+
+```yaml
+network:
+  # List of trusted internal IP ranges or addresses the agent is allowed to access.
+  # Use this if tools like web_extract are unable to access your internal
+  # services (e.g. wiki, local dev servers). Supports IPs and CIDR blocks.
+  safe_intranet_ips:
+    - "198.18.0.0/15"
+```
+
 ## Browser
 
 Configure browser automation behavior:
