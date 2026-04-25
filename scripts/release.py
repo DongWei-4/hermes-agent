@@ -39,6 +39,8 @@ PYPROJECT_FILE = REPO_ROOT / "pyproject.toml"
 
 # Auto-extracted from noreply emails + manual overrides
 AUTHOR_MAP = {
+    # local ops identities
+    "dirty-bun-ops@proton.me": "dirty-bun-ops",
     # teknium (multiple emails)
     "teknium1@gmail.com": "teknium1",
     "teknium@nousresearch.com": "teknium1",
