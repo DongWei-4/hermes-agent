@@ -8620,6 +8620,48 @@ class AIAgent:
                     content[-1]["cache_control"] = {"type": "ephemeral"}
                 break
 
+    def _normalize_empty_tool_call_content_for_api(self, api_messages: list) -> list:
+        """Normalize provider-incompatible assistant tool-call content.
+
+        Some OpenAI-compatible Chat Completions endpoints reject historical
+        assistant messages that contain tool_calls with an empty-string content
+        field. Keep the persisted/internal history unchanged and only rewrite
+        the outgoing API copy for known-affected chat-completions routes.
+        """
+        if self.api_mode != "chat_completions":
+            return api_messages
+
+        provider = str(getattr(self, "provider", "") or "").lower()
+        base_url = str(getattr(self, "base_url", "") or "")
+        is_affected_route = (
+            provider == "custom:jingua-fengxinzi"
+            or base_url.rstrip("/") == "https://gua.guagua.uk/v1"
+            or base_url_host_matches(base_url, "generativelanguage.googleapis.com")
+        )
+        if not is_affected_route:
+            return api_messages
+
+        needs_copy = any(
+            isinstance(msg, dict)
+            and msg.get("role") == "assistant"
+            and msg.get("tool_calls")
+            and msg.get("content") == ""
+            for msg in api_messages
+        )
+        if not needs_copy:
+            return api_messages
+
+        normalized = copy.deepcopy(api_messages)
+        for msg in normalized:
+            if (
+                isinstance(msg, dict)
+                and msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+                and msg.get("content") == ""
+            ):
+                msg["content"] = None
+        return normalized
+
     def _build_api_kwargs(self, api_messages: list) -> dict:
         """Build the keyword arguments dict for the active API mode."""
         if self.api_mode == "anthropic_messages":
@@ -8689,6 +8731,7 @@ class AIAgent:
             )
 
         # ── chat_completions (default) ─────────────────────────────────────
+        api_messages = self._normalize_empty_tool_call_content_for_api(api_messages)
         _ct = self._get_transport()
 
         # Provider detection flags
