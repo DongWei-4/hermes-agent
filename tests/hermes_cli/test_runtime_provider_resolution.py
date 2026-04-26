@@ -1367,14 +1367,15 @@ def test_named_custom_runtime_propagates_model_direct_path(monkeypatch):
 
 
 def test_named_custom_runtime_propagates_model_pool_path(monkeypatch):
-    """Model should propagate even when credential pool handles credentials."""
+    """Model should propagate when pool handles credentials after named key fallback."""
     monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "my-server")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(
         rp, "_get_named_custom_provider",
         lambda p: {
             "name": "my-server",
             "base_url": "http://localhost:8000/v1",
-            "api_key": "test-key",
             "model": "qwen3.6-plus",
         },
     )
@@ -1412,6 +1413,156 @@ def test_named_custom_runtime_no_model_when_absent(monkeypatch):
 
     resolved = rp.resolve_runtime_provider(requested="my-server")
     assert "model" not in resolved
+
+
+def test_named_custom_runtime_prefers_requested_provider_key_over_shared_base_url_pool(monkeypatch):
+    """A named custom provider's own key must win over any base_url-derived pool."""
+    monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "custom:provider-b")
+    monkeypatch.setattr(
+        rp,
+        "load_config",
+        lambda: {
+            "custom_providers": [
+                {
+                    "name": "provider-a",
+                    "base_url": "https://api.example.test/v1",
+                    "api_key": "sk-provider-a",
+                    "api_mode": "chat_completions",
+                },
+                {
+                    "name": "provider-b",
+                    "base_url": "https://api.example.test/v1",
+                    "api_key": "sk-provider-b",
+                    "api_mode": "chat_completions",
+                },
+            ]
+        },
+    )
+
+    def fail_if_pool_selected(*args, **kwargs):
+        raise AssertionError("base_url pool must not intercept named provider credentials")
+
+    monkeypatch.setattr(rp, "_try_resolve_from_custom_pool", fail_if_pool_selected)
+
+    resolved = rp.resolve_runtime_provider(requested="custom:provider-b")
+
+    assert resolved["provider"] == "custom"
+    assert resolved["base_url"] == "https://api.example.test/v1"
+    assert resolved["api_key"] == "sk-provider-b"
+    assert resolved["source"] == "custom_provider:provider-b"
+
+
+def test_named_custom_runtime_key_selection_is_not_config_order_dependent(monkeypatch):
+    """Reversing two same-URL custom providers must not change the selected key."""
+    monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "custom:provider-b")
+    monkeypatch.setattr(
+        rp,
+        "load_config",
+        lambda: {
+            "custom_providers": [
+                {
+                    "name": "provider-b",
+                    "base_url": "https://api.example.test/v1",
+                    "api_key": "sk-provider-b",
+                    "api_mode": "chat_completions",
+                },
+                {
+                    "name": "provider-a",
+                    "base_url": "https://api.example.test/v1",
+                    "api_key": "sk-provider-a",
+                    "api_mode": "chat_completions",
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        rp,
+        "_try_resolve_from_custom_pool",
+        lambda *a, **k: {
+            "provider": "custom",
+            "api_mode": "chat_completions",
+            "base_url": "https://api.example.test/v1",
+            "api_key": "sk-provider-a-from-pool",
+            "source": "pool:custom:provider-a",
+        },
+    )
+
+    resolved = rp.resolve_runtime_provider(requested="custom:provider-b")
+
+    assert resolved["api_key"] == "sk-provider-b"
+    assert resolved["source"] == "custom_provider:provider-b"
+
+
+def test_named_custom_runtime_still_uses_shared_base_url_pool_without_named_key(monkeypatch):
+    """The base_url pool fallback remains available when no named key is configured."""
+    monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "custom:provider-b")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        rp,
+        "load_config",
+        lambda: {
+            "custom_providers": [
+                {
+                    "name": "provider-a",
+                    "base_url": "https://api.example.test/v1",
+                    "api_key": "sk-provider-a",
+                    "api_mode": "chat_completions",
+                },
+                {
+                    "name": "provider-b",
+                    "base_url": "https://api.example.test/v1",
+                    "api_mode": "chat_completions",
+                    "model": "example-model",
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        rp,
+        "_try_resolve_from_custom_pool",
+        lambda base_url, provider_label, api_mode_override=None: {
+            "provider": provider_label,
+            "api_mode": api_mode_override or "chat_completions",
+            "base_url": base_url,
+            "api_key": "sk-pooled-key",
+            "source": "pool:custom:provider-a",
+        },
+    )
+
+    resolved = rp.resolve_runtime_provider(requested="custom:provider-b")
+
+    assert resolved["api_key"] == "sk-pooled-key"
+    assert resolved["source"] == "pool:custom:provider-a"
+    assert resolved["model"] == "example-model"
+
+
+def test_named_custom_runtime_key_env_wins_over_inline_api_key(monkeypatch):
+    """key_env should be treated as the named provider credential before inline fallback."""
+    monkeypatch.setenv("PROVIDER_B_KEY", "sk-provider-b-from-env")
+    monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "custom:provider-b")
+    monkeypatch.setattr(
+        rp,
+        "_get_named_custom_provider",
+        lambda p: {
+            "name": "provider-b",
+            "base_url": "https://api.example.test/v1",
+            "api_key": "sk-provider-b-inline",
+            "key_env": "PROVIDER_B_KEY",
+            "api_mode": "chat_completions",
+        },
+    )
+    monkeypatch.setattr(
+        rp,
+        "_try_resolve_from_custom_pool",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("pool must not intercept key_env credentials")
+        ),
+    )
+
+    resolved = rp.resolve_runtime_provider(requested="custom:provider-b")
+
+    assert resolved["api_key"] == "sk-provider-b-from-env"
 
 
 # ---------------------------------------------------------------------------
