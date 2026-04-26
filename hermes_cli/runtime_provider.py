@@ -410,20 +410,30 @@ def _resolve_named_custom_runtime(
     if not base_url:
         return None
 
-    # Check if a credential pool exists for this custom endpoint
-    pool_result = _try_resolve_from_custom_pool(base_url, "custom", custom_provider.get("api_mode"))
-    if pool_result:
-        # Propagate the model name even when using pooled credentials —
-        # the pool doesn't know about the custom_providers model field.
-        model_name = custom_provider.get("model")
-        if model_name:
-            pool_result["model"] = model_name
-        return pool_result
+    named_api_key_candidates = [
+        (explicit_api_key or "").strip(),
+        os.getenv(str(custom_provider.get("key_env", "") or "").strip(), "").strip(),
+        str(custom_provider.get("api_key", "") or "").strip(),
+    ]
+    named_api_key = next((candidate for candidate in named_api_key_candidates if has_usable_secret(candidate)), "")
+
+    if not named_api_key:
+        # Only consult the base_url-derived pool after the requested named
+        # provider's own credentials are unavailable.  Multiple logical
+        # custom providers may intentionally share one endpoint while using
+        # different keys/channels; selecting the first pool by base_url would
+        # drift away from the explicit custom:<name> request.
+        pool_result = _try_resolve_from_custom_pool(base_url, "custom", custom_provider.get("api_mode"))
+        if pool_result:
+            # Propagate the model name even when using pooled credentials —
+            # the pool doesn't know about the custom_providers model field.
+            model_name = custom_provider.get("model")
+            if model_name:
+                pool_result["model"] = model_name
+            return pool_result
 
     api_key_candidates = [
-        (explicit_api_key or "").strip(),
-        str(custom_provider.get("api_key", "") or "").strip(),
-        os.getenv(str(custom_provider.get("key_env", "") or "").strip(), "").strip(),
+        named_api_key,
         os.getenv("OPENAI_API_KEY", "").strip(),
         os.getenv("OPENROUTER_API_KEY", "").strip(),
     ]
