@@ -2344,11 +2344,23 @@ class TestAdapterBehavior(unittest.TestCase):
         )
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_format_message_normalizes_common_latex_math_for_feishu(self):
+    def test_format_message_leaves_latex_unchanged_by_default(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter
 
         adapter = FeishuAdapter(PlatformConfig())
+
+        self.assertEqual(
+            adapter.format_message(r"令 \(\alpha \leq y\)。"),
+            r"令 \(\alpha \leq y\)。",
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_format_message_normalizes_common_latex_math_when_enabled(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig(extra={"latex_normalization_enabled": True}))
 
         self.assertEqual(
             adapter.format_message(
@@ -2358,11 +2370,11 @@ class TestAdapterBehavior(unittest.TestCase):
         )
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_format_message_does_not_rewrite_latex_inside_code(self):
+    def test_format_message_does_not_rewrite_latex_inside_code_when_enabled(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter
 
-        adapter = FeishuAdapter(PlatformConfig())
+        adapter = FeishuAdapter(PlatformConfig(extra={"latex_normalization_enabled": True}))
 
         self.assertEqual(
             adapter.format_message(
@@ -2372,11 +2384,11 @@ class TestAdapterBehavior(unittest.TestCase):
         )
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_format_message_preserves_currency_dollar_ranges(self):
+    def test_format_message_preserves_currency_dollar_ranges_when_enabled(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter
 
-        adapter = FeishuAdapter(PlatformConfig())
+        adapter = FeishuAdapter(PlatformConfig(extra={"latex_normalization_enabled": True}))
 
         self.assertEqual(
             adapter.format_message("价格是 $50 到 $100，套餐 B 是 US$199。"),
@@ -2384,11 +2396,11 @@ class TestAdapterBehavior(unittest.TestCase):
         )
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_format_message_still_normalizes_single_dollar_math(self):
+    def test_format_message_still_normalizes_single_dollar_math_when_enabled(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter
 
-        adapter = FeishuAdapter(PlatformConfig())
+        adapter = FeishuAdapter(PlatformConfig(extra={"latex_normalization_enabled": True}))
 
         self.assertEqual(
             adapter.format_message(r"单行公式 $x \leq y$ 保持可读，中文紧贴$x \to y$也可读。"),

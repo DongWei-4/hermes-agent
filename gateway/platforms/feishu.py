@@ -399,6 +399,7 @@ class FeishuAdapterSettings:
     admins: frozenset[str] = frozenset()
     default_group_policy: str = ""
     group_rules: Dict[str, FeishuGroupRule] = field(default_factory=dict)
+    latex_normalization_enabled: bool = False
 
 
 @dataclass
@@ -1568,6 +1569,12 @@ class FeishuAdapter(BasePlatformAdapter):
 
         # Default group policy (for groups not in group_rules)
         default_group_policy = str(extra.get("default_group_policy", "")).strip().lower()
+        latex_normalization_enabled = _to_boolean(
+            extra.get(
+                "latex_normalization_enabled",
+                extra.get("latex_normalization", os.getenv("HERMES_FEISHU_LATEX_NORMALIZATION", "false")),
+            )
+        )
 
         return FeishuAdapterSettings(
             app_id=str(extra.get("app_id") or os.getenv("FEISHU_APP_ID", "")).strip(),
@@ -1625,6 +1632,7 @@ class FeishuAdapter(BasePlatformAdapter):
             admins=admins,
             default_group_policy=default_group_policy,
             group_rules=group_rules,
+            latex_normalization_enabled=latex_normalization_enabled,
         )
 
     def _apply_settings(self, settings: FeishuAdapterSettings) -> None:
@@ -1655,6 +1663,11 @@ class FeishuAdapter(BasePlatformAdapter):
         self._ws_reconnect_interval = settings.ws_reconnect_interval
         self._ws_ping_interval = settings.ws_ping_interval
         self._ws_ping_timeout = settings.ws_ping_timeout
+        self._latex_normalization_enabled = settings.latex_normalization_enabled
+
+    def set_latex_normalization_enabled(self, enabled: bool) -> None:
+        """Enable or disable outbound LaTeX normalization for this Feishu adapter."""
+        self._latex_normalization_enabled = bool(enabled)
 
     def _build_event_handler(self) -> Any:
         if EventDispatcherHandler is None:
@@ -2215,7 +2228,10 @@ class FeishuAdapter(BasePlatformAdapter):
 
     def format_message(self, content: str) -> str:
         """Normalize outbound Feishu text before choosing text vs post payload."""
-        return _normalize_latex_for_feishu(content.strip())
+        stripped = content.strip()
+        if not getattr(self, "_latex_normalization_enabled", False):
+            return stripped
+        return _normalize_latex_for_feishu(stripped)
 
     # =========================================================================
     # Inbound event handlers
