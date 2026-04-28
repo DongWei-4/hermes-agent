@@ -2344,6 +2344,58 @@ class TestAdapterBehavior(unittest.TestCase):
         )
 
     @patch.dict(os.environ, {}, clear=True)
+    def test_format_message_normalizes_common_latex_math_for_feishu(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+
+        self.assertEqual(
+            adapter.format_message(
+                r"令 \(\alpha \leq \frac{a+b}{\sqrt{x}}\)，且 $$y_i = x^2 \times 3$$。"
+            ),
+            "令 α ≤ (a+b)/(√(x))，且 y_i = x^2 × 3。",
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_format_message_does_not_rewrite_latex_inside_code(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+
+        self.assertEqual(
+            adapter.format_message(
+                "公式：\\(x \\to y\\)\n```python\nexpr = r'\\frac{a}{b}'\n```\n`\\alpha`"
+            ),
+            "公式：x → y\n```python\nexpr = r'\\frac{a}{b}'\n```\n`\\alpha`",
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_format_message_preserves_currency_dollar_ranges(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+
+        self.assertEqual(
+            adapter.format_message("价格是 $50 到 $100，套餐 B 是 US$199。"),
+            "价格是 $50 到 $100，套餐 B 是 US$199。",
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_format_message_still_normalizes_single_dollar_math(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+
+        self.assertEqual(
+            adapter.format_message(r"单行公式 $x \leq y$ 保持可读，中文紧贴$x \to y$也可读。"),
+            "单行公式 x ≤ y 保持可读，中文紧贴x → y也可读。",
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
     def test_build_post_payload_keeps_full_markdown_text(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter
