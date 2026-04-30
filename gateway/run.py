@@ -3617,6 +3617,9 @@ class GatewayRunner:
         if canonical == "reasoning":
             return await self._handle_reasoning_command(event)
 
+        if canonical == "latex":
+            return await self._handle_latex_command(event)
+
         if canonical == "fast":
             return await self._handle_fast_command(event)
 
@@ -6906,6 +6909,65 @@ class GatewayRunner:
             return f"🧠 ✓ Reasoning effort set to `{effort}` (saved to config)\n_(takes effect on next message)_"
         else:
             return f"🧠 ✓ Reasoning effort set to `{effort}` (this session only)"
+
+    async def _handle_latex_command(self, event: MessageEvent) -> str:
+        """Handle /latex — toggle Feishu outbound LaTeX normalization.
+
+        Usage:
+            /latex              Show current Feishu LaTeX normalization state
+            /latex status       Show current Feishu LaTeX normalization state
+            /latex on           Enable normalization for Feishu outbound messages
+            /latex off          Disable normalization for Feishu outbound messages
+        """
+        import yaml
+
+        if event.source.platform != Platform.FEISHU:
+            return "🧮 /latex controls Feishu message rendering and is only available from Feishu chats."
+
+        args = event.get_command_args().strip().lower()
+        if args in {"", "status"}:
+            adapter = self.adapters.get(Platform.FEISHU)
+            enabled = bool(getattr(adapter, "_latex_normalization_enabled", False)) if adapter else False
+            state = "ON" if enabled else "OFF"
+            return (
+                "🧮 **Feishu LaTeX Rendering**\n\n"
+                f"Current mode: **{state}**\n\n"
+                "When ON, common LaTeX math such as `\\alpha`, `\\leq`, `\\frac{a}{b}` "
+                "is converted to Feishu-readable symbols. Default is OFF.\n\n"
+                "_Usage:_ `/latex <on|off|status>`"
+            )
+
+        if args in {"on", "enable", "enabled"}:
+            enabled = True
+            label = "ON"
+        elif args in {"off", "disable", "disabled"}:
+            enabled = False
+            label = "OFF"
+        else:
+            return f"⚠️ Unknown argument: `{args}`\n\n**Valid options:** on, off, status"
+
+        adapter = self.adapters.get(Platform.FEISHU)
+        if adapter and hasattr(adapter, "set_latex_normalization_enabled"):
+            adapter.set_latex_normalization_enabled(enabled)
+
+        config_path = _hermes_home / "config.yaml"
+        saved = False
+        try:
+            user_config = {}
+            if config_path.exists():
+                with open(config_path, encoding="utf-8") as f:
+                    user_config = yaml.safe_load(f) or {}
+            platforms_cfg = user_config.setdefault("platforms", {})
+            feishu_cfg = platforms_cfg.setdefault("feishu", {})
+            extra_cfg = feishu_cfg.setdefault("extra", {})
+            extra_cfg["latex_normalization_enabled"] = enabled
+            atomic_yaml_write(config_path, user_config)
+            saved = True
+        except Exception as exc:
+            logger.error("Failed to save Feishu latex normalization setting: %s", exc)
+
+        suffix = " (saved to config)" if saved else " (this session only)"
+        return f"🧮 ✓ Feishu LaTeX rendering: **{label}**{suffix}"
 
     async def _handle_fast_command(self, event: MessageEvent) -> str:
         """Handle /fast — mirror the CLI Priority Processing toggle in gateway chats."""
