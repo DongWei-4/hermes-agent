@@ -7,13 +7,13 @@ name: Lint (ruff + ty)
 
 on:
   push:
-    branches: [main]
+    branches: [master, "master-v*"]
     paths-ignore:
       - "**/*.md"
       - "docs/**"
       - "website/**"
   pull_request:
-    branches: [main]
+    branches: [master, "master-v*"]
     paths-ignore:
       - "**/*.md"
       - "docs/**"
@@ -120,6 +120,9 @@ jobs:
 
       - name: Post / update PR comment
         if: github.event_name == 'pull_request'
+        # Fork PRs can receive a read-only GITHUB_TOKEN, so comment posting
+        # must stay best-effort; lint diagnostics are already in the job summary.
+        continue-on-error: true
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
           script: |

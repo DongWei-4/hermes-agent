@@ -2,15 +2,19 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [master, "master-v*"]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
+      # Workflow-only PRs do not need to run the full source test suite.
+      - '.github/workflows/**'
   pull_request:
-    branches: [main]
+    branches: [master, "master-v*"]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
+      # Workflow-only PRs do not need to run the full source test suite.
+      - '.github/workflows/**'
 
 permissions:
   contents: read
