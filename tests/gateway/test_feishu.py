@@ -2549,6 +2549,63 @@ class TestAdapterBehavior(unittest.TestCase):
         self.assertEqual(elements, [{"tag": "md", "text": "可以用 **粗体** 和 *斜体*。"}])
 
     @patch.dict(os.environ, {}, clear=True)
+    def test_send_reply_uses_native_post_elements_for_markdown(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        captured = {}
+
+        class _MessageAPI:
+            def reply(self, request):
+                captured["request"] = request
+                return SimpleNamespace(
+                    success=lambda: True,
+                    data=SimpleNamespace(message_id="om_reply_markdown"),
+                )
+
+        adapter._client = SimpleNamespace(
+            im=SimpleNamespace(
+                v1=SimpleNamespace(
+                    message=_MessageAPI(),
+                )
+            )
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("gateway.platforms.feishu.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(
+                adapter.send(
+                    chat_id="oc_chat",
+                    content="## 标题\n可以用 **粗体** 和 `代码`。\n---\n```python\nprint(1)\n```",
+                    reply_to="om_parent",
+                )
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(captured["request"].request_body.msg_type, "post")
+        payload = json.loads(captured["request"].request_body.content)
+        rows = payload["zh_cn"]["content"]
+        self.assertNotIn('"tag": "md"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(
+            rows,
+            [
+                [{"tag": "text", "text": "标题", "style": ["bold"]}],
+                [
+                    {"tag": "text", "text": "可以用 "},
+                    {"tag": "text", "text": "粗体", "style": ["bold"]},
+                    {"tag": "text", "text": " 和 "},
+                    {"tag": "text", "text": "代码", "style": ["code"]},
+                    {"tag": "text", "text": "。"},
+                ],
+                [{"tag": "hr"}],
+                [{"tag": "code_block", "language": "python", "text": "print(1)"}],
+            ],
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
     def test_send_splits_fenced_code_blocks_into_separate_post_rows(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter
