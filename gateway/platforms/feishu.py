@@ -546,6 +546,136 @@ def _coerce_required_int(value: Any, default: int, min_value: int = 0) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _plain_text_element(text: str) -> Dict[str, Any]:
+    return {"tag": "text", "text": text}
+
+
+def _styled_text_element(text: str, *styles: str) -> Dict[str, Any]:
+    element: Dict[str, Any] = {"tag": "text", "text": text}
+    if styles:
+        element["style"] = list(styles)
+    return element
+
+
+def _append_text_element(row: List[Dict[str, Any]], text: str, *styles: str) -> None:
+    if not text:
+        return
+    element = _styled_text_element(text, *styles) if styles else _plain_text_element(text)
+    if row and row[-1].get("tag") == "text" and row[-1].get("style") == element.get("style"):
+        row[-1]["text"] = str(row[-1].get("text", "")) + text
+    else:
+        row.append(element)
+
+
+def _parse_inline_markdown_to_post_elements(text: str) -> List[Dict[str, Any]]:
+    """Best-effort inline Markdown conversion for Feishu reply post rows.
+
+    Feishu's reply surface renders post ``md`` elements unreliably, so reply
+    sends use native post elements for common AI-output formatting instead.
+    This is intentionally small and conservative, not a full Markdown parser.
+    """
+    row: List[Dict[str, Any]] = []
+    index = 0
+    while index < len(text):
+        if text.startswith("**", index):
+            end = text.find("**", index + 2)
+            if end > index + 2:
+                _append_text_element(row, text[index + 2:end], "bold")
+                index = end + 2
+                continue
+        if text.startswith("`", index):
+            end = text.find("`", index + 1)
+            if end > index + 1:
+                _append_text_element(row, text[index + 1:end], "code")
+                index = end + 1
+                continue
+        if text.startswith("~~", index):
+            end = text.find("~~", index + 2)
+            if end > index + 2:
+                _append_text_element(row, text[index + 2:end], "strikethrough")
+                index = end + 2
+                continue
+        if text.startswith("<u>", index):
+            end = text.find("</u>", index + 3)
+            if end > index + 3:
+                _append_text_element(row, text[index + 3:end], "underline")
+                index = end + 4
+                continue
+        if text.startswith("[", index):
+            match = _MARKDOWN_LINK_RE.match(text, index)
+            if match:
+                row.append({"tag": "a", "text": match.group(1), "href": match.group(2).strip()})
+                index = match.end()
+                continue
+        if text.startswith("*", index) and not text.startswith("**", index):
+            end = text.find("*", index + 1)
+            if end > index + 1:
+                _append_text_element(row, text[index + 1:end], "italic")
+                index = end + 1
+                continue
+        next_indices = [
+            pos for token in ("**", "`", "~~", "<u>", "[", "*")
+            if (pos := text.find(token, index + 1)) != -1
+        ]
+        next_index = min(next_indices) if next_indices else len(text)
+        _append_text_element(row, text[index:next_index])
+        index = next_index
+    return row or [_plain_text_element("")]
+
+
+def _build_native_markdown_post_rows(content: str) -> List[List[Dict[str, Any]]]:
+    rows: List[List[Dict[str, Any]]] = []
+    lines = content.replace("\r\n", "\n").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        fence_match = _MARKDOWN_FENCE_OPEN_RE.match(stripped)
+        if fence_match:
+            language = _sanitize_fence_language(fence_match.group(1))
+            code_lines: List[str] = []
+            index += 1
+            while index < len(lines) and not _MARKDOWN_FENCE_CLOSE_RE.match(lines[index].strip()):
+                code_lines.append(lines[index])
+                index += 1
+            if index < len(lines):
+                index += 1
+            rows.append([{"tag": "code_block", "language": language, "text": "\n".join(code_lines)}])
+            continue
+        if not stripped:
+            index += 1
+            continue
+        if re.fullmatch(r"---+", stripped):
+            rows.append([{"tag": "hr"}])
+            index += 1
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if heading:
+            rows.append([_styled_text_element(heading.group(2), "bold")])
+            index += 1
+            continue
+        bullet = re.match(r"^\s*([-*])\s+(.*)$", line)
+        if bullet:
+            rows.append([_plain_text_element("• "), *_parse_inline_markdown_to_post_elements(bullet.group(2))])
+            index += 1
+            continue
+        numbered = re.match(r"^\s*(\d+)\.\s+(.*)$", line)
+        if numbered:
+            rows.append([_plain_text_element(f"{numbered.group(1)}. "), *_parse_inline_markdown_to_post_elements(numbered.group(2))])
+            index += 1
+            continue
+        rows.append(_parse_inline_markdown_to_post_elements(line))
+        index += 1
+    return rows or [[_plain_text_element("")]]
+
+
+def _build_native_markdown_post_payload(content: str) -> str:
+    return json.dumps(
+        {"zh_cn": {"content": _build_native_markdown_post_rows(content)}},
+        ensure_ascii=False,
+    )
+
+
 def _build_markdown_post_payload(content: str) -> str:
     rows = _build_markdown_post_rows(content)
     return json.dumps(
@@ -1711,7 +1841,11 @@ class FeishuAdapter(BasePlatformAdapter):
 
         try:
             for chunk in chunks:
-                msg_type, payload = self._build_outbound_payload(chunk)
+                native_markdown = bool(reply_to or (metadata or {}).get("thread_id"))
+                msg_type, payload = self._build_outbound_payload(
+                    chunk,
+                    native_markdown=native_markdown,
+                )
                 try:
                     response = await self._feishu_send_with_retry(
                         chat_id=chat_id,
@@ -4004,7 +4138,7 @@ class FeishuAdapter(BasePlatformAdapter):
     # Outbound payload construction and send pipeline
     # =========================================================================
 
-    def _build_outbound_payload(self, content: str) -> tuple[str, str]:
+    def _build_outbound_payload(self, content: str, *, native_markdown: bool = False) -> tuple[str, str]:
         # Feishu post-type 'md' elements do not render markdown tables; sending
         # table content as post causes the message to appear blank on the client.
         # Force plain text for anything that looks like a markdown table.
@@ -4012,7 +4146,12 @@ class FeishuAdapter(BasePlatformAdapter):
             text_payload = {"text": content}
             return "text", json.dumps(text_payload, ensure_ascii=False)
         if _MARKDOWN_HINT_RE.search(content):
-            return "post", _build_markdown_post_payload(content)
+            payload = (
+                _build_native_markdown_post_payload(content)
+                if native_markdown
+                else _build_markdown_post_payload(content)
+            )
+            return "post", payload
         text_payload = {"text": content}
         return "text", json.dumps(text_payload, ensure_ascii=False)
 
