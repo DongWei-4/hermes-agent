@@ -1965,3 +1965,174 @@ def test_preflight_codex_input_deduplicates_reasoning_ids(monkeypatch):
     # IDs must be stripped — with store=False the API 404s on id lookups.
     for it in reasoning_items:
         assert "id" not in it
+
+
+# ── Null-output TypeError recovery ──────────────────────────────────────────
+
+class _FakeResponsesStreamWithEvents:
+    """Variant of _FakeResponsesStream that also yields stream events.
+
+    Supports two error injection points:
+      - iter_error: raises during __iter__ after yielding all events
+        (simulates SDK handle_event() crashing on response.completed)
+      - final_error: raises from get_final_response()
+    """
+
+    def __init__(self, events=(), *, final_response=None, final_error=None, iter_error=None):
+        self._events = list(events)
+        self._final_response = final_response
+        self._final_error = final_error
+        self._iter_error = iter_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def __iter__(self):
+        for ev in self._events:
+            yield ev
+        if self._iter_error is not None:
+            raise self._iter_error
+
+    def get_final_response(self):
+        if self._final_error is not None:
+            raise self._final_error
+        return self._final_response
+
+
+def test_run_codex_stream_recovers_text_from_deltas_after_null_output_typeerror(monkeypatch):
+    """Stream yields text deltas; TypeError during iteration (SDK
+    handle_event fails on null response.output). Should recover and
+    synthesize a valid response from collected deltas."""
+    agent = _build_agent(monkeypatch)
+    api_kwargs = _codex_request_kwargs()
+
+    stream_events = [
+        SimpleNamespace(type="response.output_text.delta", delta="Hello "),
+        SimpleNamespace(type="response.output_text.delta", delta="world"),
+    ]
+    fake_stream = _FakeResponsesStreamWithEvents(
+        stream_events,
+        iter_error=TypeError("'NoneType' object is not iterable"),
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=lambda **kw: fake_stream)
+    )
+
+    response = agent._run_codex_stream(api_kwargs)
+    assert response.output[0].content[0].text == "Hello world"
+    assert response.status == "completed"
+    assert response.model == "gpt-5-codex"
+
+
+def test_run_codex_stream_recovers_tool_call_after_null_output_typeerror(monkeypatch):
+    """Stream yields function_call output_item.done; TypeError during
+    iteration. Should recover with the function_call item intact,
+    NOT synthesize a plain-text message."""
+    agent = _build_agent(monkeypatch)
+    api_kwargs = _codex_request_kwargs()
+
+    fc_item = SimpleNamespace(
+        type="function_call",
+        id="fc_1",
+        call_id="call_1",
+        name="terminal",
+        arguments="{}",
+    )
+    stream_events = [
+        SimpleNamespace(type="response.output_item.done", item=fc_item),
+    ]
+    fake_stream = _FakeResponsesStreamWithEvents(
+        stream_events,
+        iter_error=TypeError("'NoneType' object is not iterable"),
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=lambda **kw: fake_stream)
+    )
+
+    response = agent._run_codex_stream(api_kwargs)
+    assert len(response.output) == 1
+    assert response.output[0].type == "function_call"
+    assert response.output[0].name == "terminal"
+
+
+def test_run_codex_stream_recovers_from_typeerror_in_get_final_response(monkeypatch):
+    """TypeError from get_final_response() (after iteration completes
+    without crashing) also recovers. Covers both injection points."""
+    agent = _build_agent(monkeypatch)
+    api_kwargs = _codex_request_kwargs()
+
+    fc_item = SimpleNamespace(
+        type="function_call",
+        id="fc_2",
+        call_id="call_2",
+        name="read_file",
+        arguments='{"path":"/tmp/x"}',
+    )
+    stream_events = [
+        SimpleNamespace(type="response.output_item.done", item=fc_item),
+    ]
+    fake_stream = _FakeResponsesStreamWithEvents(
+        stream_events,
+        final_error=TypeError("'NoneType' object is not iterable"),
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=lambda **kw: fake_stream)
+    )
+
+    response = agent._run_codex_stream(api_kwargs)
+    assert len(response.output) == 1
+    assert response.output[0].type == "function_call"
+    assert response.output[0].name == "read_file"
+
+
+def test_run_codex_stream_fallback_recovers_terminal_null_output(monkeypatch):
+    """create(stream=True) fallback where terminal response.output is None
+    (not empty list). Backfill code uses the updated condition
+    `not isinstance(_out, list) or not _out` and the dict/namespace-aware
+    _resp_get/_resp_set helpers to read/write 'output'."""
+    agent = _build_agent(monkeypatch)
+    calls = {"stream": 0, "create": 0}
+
+    # Terminal response with output=None exercises the expanded condition
+    create_stream = _FakeCreateStream([
+        SimpleNamespace(type="response.created"),
+        SimpleNamespace(type="response.in_progress"),
+        SimpleNamespace(type="response.output_text.delta", delta="fallback "),
+        SimpleNamespace(type="response.output_text.delta", delta="text"),
+        SimpleNamespace(type="response.completed", response=SimpleNamespace(
+            output=None, model="gpt-5-codex",
+        )),
+    ])
+
+    def _fake_stream(**kwargs):
+        calls["stream"] += 1
+        return _FakeResponsesStream(
+            final_error=RuntimeError("Didn't receive a `response.completed` event.")
+        )
+
+    def _fake_create(**kwargs):
+        calls["create"] += 1
+        assert kwargs.get("stream") is True
+        return create_stream
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=_fake_stream,
+            create=_fake_create,
+        )
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert calls["stream"] == 2
+    assert calls["create"] == 1
+    assert create_stream.closed is True
+    # output=None was backfilled from collected deltas
+    assert response.output[0].type == "message"
+    assert response.output[0].content[0].text == "fallback text"
+    assert response.model == "gpt-5-codex"
