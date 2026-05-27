@@ -2812,13 +2812,15 @@ class TestAuxUnhealthyCache:
 
 def test_codex_adapter_recovers_text_after_null_output_typeerror(monkeypatch):
     """_CodexCompletionsAdapter.create(): stream yields output_text.delta,
-    get_final_response() raises TypeError because response.output is null.
-    Should recover and return a valid chat.completions-like object."""
+    then raises TypeError during iteration (SDK handle_event crashes on
+    null response.output). Should recover and return a valid
+    chat.completions-like object."""
     from agent.auxiliary_client import _is_codex_null_output_type_error
 
-    collected_deltas = []
-
     class _FakeStream:
+        def __init__(self):
+            self._iter_done = False
+
         def __enter__(self):
             return self
 
@@ -2826,13 +2828,12 @@ def test_codex_adapter_recovers_text_after_null_output_typeerror(monkeypatch):
             return False
 
         def __iter__(self):
-            return iter([
-                SimpleNamespace(type="response.output_text.delta", delta="Hello "),
-                SimpleNamespace(type="response.output_text.delta", delta="aux"),
-            ])
+            yield SimpleNamespace(type="response.output_text.delta", delta="Hello ")
+            yield SimpleNamespace(type="response.output_text.delta", delta="aux")
+            raise TypeError("'NoneType' object is not iterable")
 
         def get_final_response(self):
-            raise TypeError("'NoneType' object is not iterable")
+            return None  # never reached
 
     fake_client = MagicMock()
     fake_client.responses.stream.side_effect = lambda **kw: _FakeStream()

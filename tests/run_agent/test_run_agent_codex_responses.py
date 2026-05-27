@@ -1970,12 +1970,19 @@ def test_preflight_codex_input_deduplicates_reasoning_ids(monkeypatch):
 # ── Null-output TypeError recovery ──────────────────────────────────────────
 
 class _FakeResponsesStreamWithEvents:
-    """Variant of _FakeResponsesStream that also yields stream events."""
+    """Variant of _FakeResponsesStream that also yields stream events.
 
-    def __init__(self, events=(), *, final_response=None, final_error=None):
+    Supports two error injection points:
+      - iter_error: raises during __iter__ after yielding all events
+        (simulates SDK handle_event() crashing on response.completed)
+      - final_error: raises from get_final_response()
+    """
+
+    def __init__(self, events=(), *, final_response=None, final_error=None, iter_error=None):
         self._events = list(events)
         self._final_response = final_response
         self._final_error = final_error
+        self._iter_error = iter_error
 
     def __enter__(self):
         return self
@@ -1984,7 +1991,10 @@ class _FakeResponsesStreamWithEvents:
         return False
 
     def __iter__(self):
-        return iter(self._events)
+        for ev in self._events:
+            yield ev
+        if self._iter_error is not None:
+            raise self._iter_error
 
     def get_final_response(self):
         if self._final_error is not None:
@@ -1993,8 +2003,8 @@ class _FakeResponsesStreamWithEvents:
 
 
 def test_run_codex_stream_recovers_text_from_deltas_after_null_output_typeerror(monkeypatch):
-    """Stream yields text deltas; get_final_response() raises TypeError
-    because response.completed.output is null. Should recover and
+    """Stream yields text deltas; TypeError during iteration (SDK
+    handle_event fails on null response.output). Should recover and
     synthesize a valid response from collected deltas."""
     agent = _build_agent(monkeypatch)
     api_kwargs = _codex_request_kwargs()
@@ -2005,7 +2015,7 @@ def test_run_codex_stream_recovers_text_from_deltas_after_null_output_typeerror(
     ]
     fake_stream = _FakeResponsesStreamWithEvents(
         stream_events,
-        final_error=TypeError("'NoneType' object is not iterable"),
+        iter_error=TypeError("'NoneType' object is not iterable"),
     )
 
     agent.client = SimpleNamespace(
@@ -2019,8 +2029,8 @@ def test_run_codex_stream_recovers_text_from_deltas_after_null_output_typeerror(
 
 
 def test_run_codex_stream_recovers_tool_call_after_null_output_typeerror(monkeypatch):
-    """Stream yields function_call output_item.done; get_final_response()
-    raises TypeError. Should recover with the function_call item intact,
+    """Stream yields function_call output_item.done; TypeError during
+    iteration. Should recover with the function_call item intact,
     NOT synthesize a plain-text message."""
     agent = _build_agent(monkeypatch)
     api_kwargs = _codex_request_kwargs()
@@ -2037,7 +2047,7 @@ def test_run_codex_stream_recovers_tool_call_after_null_output_typeerror(monkeyp
     ]
     fake_stream = _FakeResponsesStreamWithEvents(
         stream_events,
-        final_error=TypeError("'NoneType' object is not iterable"),
+        iter_error=TypeError("'NoneType' object is not iterable"),
     )
 
     agent.client = SimpleNamespace(
@@ -2048,3 +2058,34 @@ def test_run_codex_stream_recovers_tool_call_after_null_output_typeerror(monkeyp
     assert len(response.output) == 1
     assert response.output[0].type == "function_call"
     assert response.output[0].name == "terminal"
+
+
+def test_run_codex_stream_recovers_from_typeerror_in_get_final_response(monkeypatch):
+    """TypeError from get_final_response() (after iteration completes
+    without crashing) also recovers. Covers both injection points."""
+    agent = _build_agent(monkeypatch)
+    api_kwargs = _codex_request_kwargs()
+
+    fc_item = SimpleNamespace(
+        type="function_call",
+        id="fc_2",
+        call_id="call_2",
+        name="read_file",
+        arguments='{"path":"/tmp/x"}',
+    )
+    stream_events = [
+        SimpleNamespace(type="response.output_item.done", item=fc_item),
+    ]
+    fake_stream = _FakeResponsesStreamWithEvents(
+        stream_events,
+        final_error=TypeError("'NoneType' object is not iterable"),
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=lambda **kw: fake_stream)
+    )
+
+    response = agent._run_codex_stream(api_kwargs)
+    assert len(response.output) == 1
+    assert response.output[0].type == "function_call"
+    assert response.output[0].name == "read_file"

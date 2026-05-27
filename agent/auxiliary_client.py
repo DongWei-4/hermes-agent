@@ -788,28 +788,29 @@ class _CodexCompletionsAdapter:
                 timeout_timer.start()
             _check_cancelled()
             with self._client.responses.stream(**resp_kwargs) as stream:
-                for _event in stream:
-                    _check_cancelled()
-                    _etype = getattr(_event, "type", "")
-                    if _etype == "response.output_item.done":
-                        _done = getattr(_event, "item", None)
-                        if _done is not None:
-                            collected_output_items.append(_done)
-                    elif "output_text.delta" in _etype:
-                        _delta = getattr(_event, "delta", "")
-                        if _delta:
-                            collected_text_deltas.append(_delta)
-                    elif "function_call" in _etype:
-                        has_function_calls = True
-                _check_cancelled()
                 final = None
                 try:
+                    for _event in stream:
+                        _check_cancelled()
+                        _etype = getattr(_event, "type", "")
+                        if _etype == "response.output_item.done":
+                            _done = getattr(_event, "item", None)
+                            if _done is not None:
+                                collected_output_items.append(_done)
+                        elif "output_text.delta" in _etype:
+                            _delta = getattr(_event, "delta", "")
+                            if _delta:
+                                collected_text_deltas.append(_delta)
+                        elif "function_call" in _etype:
+                            has_function_calls = True
+                    _check_cancelled()
                     final = stream.get_final_response()
                 except TypeError as exc:
                     if not _is_codex_null_output_type_error(exc):
                         raise
-                    # Recovery: SDK cannot iterate null output, but we
-                    # have stream events. Synthesize a valid response.
+                    # Recovery: SDK cannot iterate null output (can happen
+                    # during for-event iteration OR get_final_response).
+                    # Synthesize a valid response from collected stream data.
                     if collected_output_items:
                         final = SimpleNamespace(
                             output=list(collected_output_items),
