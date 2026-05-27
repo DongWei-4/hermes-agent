@@ -626,6 +626,13 @@ def _convert_content_for_responses(content: Any) -> Any:
     return converted or ""
 
 
+def _is_codex_null_output_type_error(exc: BaseException) -> bool:
+    """Return True when the exception is the specific TypeError produced by
+    the OpenAI SDK when a Codex backend returns response.completed with
+    ``response.output == null``, which then fails internal iteration."""
+    return isinstance(exc, TypeError) and "'NoneType' object is not iterable" in str(exc)
+
+
 class _CodexCompletionsAdapter:
     """Drop-in shim that accepts chat.completions.create() kwargs and
     routes them through the Codex Responses streaming API."""
@@ -795,18 +802,53 @@ class _CodexCompletionsAdapter:
                     elif "function_call" in _etype:
                         has_function_calls = True
                 _check_cancelled()
-                final = stream.get_final_response()
+                final = None
+                try:
+                    final = stream.get_final_response()
+                except TypeError as exc:
+                    if not _is_codex_null_output_type_error(exc):
+                        raise
+                    # Recovery: SDK cannot iterate null output, but we
+                    # have stream events. Synthesize a valid response.
+                    if collected_output_items:
+                        final = SimpleNamespace(
+                            output=list(collected_output_items),
+                            status="completed",
+                            model=model,
+                            usage=None,
+                        )
+                        logger.debug(
+                            "Codex auxiliary: recovered %d output items after null-output TypeError",
+                            len(collected_output_items),
+                        )
+                    elif collected_text_deltas and not has_function_calls:
+                        assembled = "".join(collected_text_deltas)
+                        final = SimpleNamespace(
+                            output=[SimpleNamespace(
+                                type="message", role="assistant", status="completed",
+                                content=[SimpleNamespace(type="output_text", text=assembled)],
+                            )],
+                            status="completed",
+                            model=model,
+                            usage=None,
+                        )
+                        logger.debug(
+                            "Codex auxiliary: recovered text from %d deltas (%d chars) after null-output TypeError",
+                            len(collected_text_deltas), len(assembled),
+                        )
+                    else:
+                        raise  # Nothing to recover
 
-            # Backfill empty output from collected stream events
+            # Backfill empty/null output from collected stream events
             _output = getattr(final, "output", None)
-            if isinstance(_output, list) and not _output:
-                if collected_output_items:
+            if not isinstance(_output, list) or not _output:
+                if collected_output_items and not _output:
                     final.output = list(collected_output_items)
                     logger.debug(
                         "Codex auxiliary: backfilled %d output items from stream events",
                         len(collected_output_items),
                     )
-                elif collected_text_deltas and not has_function_calls:
+                elif collected_text_deltas and not has_function_calls and not _output:
                     # Only synthesize text when no tool calls were streamed —
                     # a function_call response with incidental text should not
                     # be collapsed into a plain-text message.

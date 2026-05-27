@@ -7090,6 +7090,13 @@ class AIAgent:
     def _close_request_openai_client(self, client: Any, *, reason: str) -> None:
         self._close_openai_client(client, reason=reason, shared=False)
 
+    @staticmethod
+    def _is_codex_null_output_type_error(exc: BaseException) -> bool:
+        """Return True when the exception is the specific TypeError produced by
+        the OpenAI SDK when a Codex backend returns response.completed with
+        ``response.output == null``, which then fails internal iteration."""
+        return isinstance(exc, TypeError) and "'NoneType' object is not iterable" in str(exc)
+
     def _run_codex_stream(self, api_kwargs: dict, client: Any = None, on_first_delta: callable = None):
         """Execute one streaming Responses API request and return the final response."""
         import httpx as _httpx
@@ -7155,19 +7162,55 @@ class AIAgent:
                                 sum(len(p) for p in self._codex_streamed_text_parts),
                                 self._client_log_context(),
                             )
-                    final_response = stream.get_final_response()
-                    # PATCH: ChatGPT Codex backend streams valid output items
-                    # but get_final_response() can return an empty output list.
-                    # Backfill from collected items or synthesize from deltas.
-                    _out = getattr(final_response, "output", None)
-                    if isinstance(_out, list) and not _out:
+                    final_response = None
+                    try:
+                        final_response = stream.get_final_response()
+                    except TypeError as exc:
+                        if not self._is_codex_null_output_type_error(exc):
+                            raise
+                        # Recovery: SDK cannot iterate null output, but we
+                        # have stream events. Synthesize a valid response.
                         if collected_output_items:
+                            final_response = SimpleNamespace(
+                                output=list(collected_output_items),
+                                status="completed",
+                                model=api_kwargs.get("model", ""),
+                                usage=None,
+                            )
+                            logger.debug(
+                                "Codex stream: recovered %d output items after null-output TypeError",
+                                len(collected_output_items),
+                            )
+                        elif self._codex_streamed_text_parts and not has_tool_calls:
+                            assembled = "".join(self._codex_streamed_text_parts)
+                            final_response = SimpleNamespace(
+                                output=[SimpleNamespace(
+                                    type="message", role="assistant", status="completed",
+                                    content=[SimpleNamespace(type="output_text", text=assembled)],
+                                )],
+                                status="completed",
+                                model=api_kwargs.get("model", ""),
+                                usage=None,
+                            )
+                            logger.debug(
+                                "Codex stream: recovered text from %d deltas (%d chars) after null-output TypeError",
+                                len(self._codex_streamed_text_parts), len(assembled),
+                            )
+                        else:
+                            raise  # Nothing to recover
+                    # PATCH: ChatGPT Codex backend streams valid output items
+                    # but get_final_response() can return an empty output list
+                    # or None. Backfill from collected items or synthesize
+                    # from deltas.
+                    _out = getattr(final_response, "output", None)
+                    if not isinstance(_out, list) or not _out:
+                        if collected_output_items and not _out:
                             final_response.output = list(collected_output_items)
                             logger.debug(
                                 "Codex stream: backfilled %d output items from stream events",
                                 len(collected_output_items),
                             )
-                        elif self._codex_streamed_text_parts and not has_tool_calls:
+                        elif self._codex_streamed_text_parts and not has_tool_calls and not _out:
                             assembled = "".join(self._codex_streamed_text_parts)
                             final_response.output = [SimpleNamespace(
                                 type="message",

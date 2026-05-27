@@ -2808,3 +2808,41 @@ class TestAuxUnhealthyCache:
             )
             # After the 402, OpenRouter is in the unhealthy cache.
             assert _is_provider_unhealthy("openrouter") is True
+
+
+def test_codex_adapter_recovers_text_after_null_output_typeerror(monkeypatch):
+    """_CodexCompletionsAdapter.create(): stream yields output_text.delta,
+    get_final_response() raises TypeError because response.output is null.
+    Should recover and return a valid chat.completions-like object."""
+    from agent.auxiliary_client import _is_codex_null_output_type_error
+
+    collected_deltas = []
+
+    class _FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            return iter([
+                SimpleNamespace(type="response.output_text.delta", delta="Hello "),
+                SimpleNamespace(type="response.output_text.delta", delta="aux"),
+            ])
+
+        def get_final_response(self):
+            raise TypeError("'NoneType' object is not iterable")
+
+    fake_client = MagicMock()
+    fake_client.responses.stream.side_effect = lambda **kw: _FakeStream()
+
+    adapter = _CodexCompletionsAdapter(fake_client, "gpt-5.5")
+    result = adapter.create(
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert result.choices[0].message.content == "Hello aux"
+    assert result.choices[0].message.role == "assistant"
+    assert result.model == "gpt-5.5"
+    assert result.choices[0].finish_reason == "stop"
