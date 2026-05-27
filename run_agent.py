@@ -7334,22 +7334,36 @@ class AIAgent:
                 if terminal_response is None and isinstance(event, dict):
                     terminal_response = event.get("response")
                 if terminal_response is not None:
+                    # Helpers that read/write a field on either a namespace
+                    # object (getattr/setattr) or a raw dict ([] / .get).
+                    def _resp_get(obj, key, default=None):
+                        val = getattr(obj, key, None)
+                        if val is None and isinstance(obj, dict):
+                            val = obj.get(key, default)
+                        return val if val is not None else default
+
+                    def _resp_set(obj, key, value):
+                        if isinstance(obj, dict):
+                            obj[key] = value
+                        else:
+                            setattr(obj, key, value)
+
                     # Backfill empty/null output from collected stream events
-                    _out = getattr(terminal_response, "output", None)
+                    _out = _resp_get(terminal_response, "output", None)
                     if not isinstance(_out, list) or not _out:
                         if collected_output_items:
-                            terminal_response.output = list(collected_output_items)
+                            _resp_set(terminal_response, "output", list(collected_output_items))
                             logger.debug(
                                 "Codex fallback stream: backfilled %d output items",
                                 len(collected_output_items),
                             )
                         elif collected_text_deltas:
                             assembled = "".join(collected_text_deltas)
-                            terminal_response.output = [SimpleNamespace(
+                            _resp_set(terminal_response, "output", [SimpleNamespace(
                                 type="message", role="assistant",
                                 status="completed",
                                 content=[SimpleNamespace(type="output_text", text=assembled)],
-                            )]
+                            )])
                             logger.debug(
                                 "Codex fallback stream: synthesized from %d deltas (%d chars)",
                                 len(collected_text_deltas), len(assembled),

@@ -2089,3 +2089,50 @@ def test_run_codex_stream_recovers_from_typeerror_in_get_final_response(monkeypa
     assert len(response.output) == 1
     assert response.output[0].type == "function_call"
     assert response.output[0].name == "read_file"
+
+
+def test_run_codex_stream_fallback_recovers_terminal_null_output(monkeypatch):
+    """create(stream=True) fallback where terminal response.output is None
+    (not empty list). Backfill code uses the updated condition
+    `not isinstance(_out, list) or not _out` and the dict/namespace-aware
+    _resp_get/_resp_set helpers to read/write 'output'."""
+    agent = _build_agent(monkeypatch)
+    calls = {"stream": 0, "create": 0}
+
+    # Terminal response with output=None exercises the expanded condition
+    create_stream = _FakeCreateStream([
+        SimpleNamespace(type="response.created"),
+        SimpleNamespace(type="response.in_progress"),
+        SimpleNamespace(type="response.output_text.delta", delta="fallback "),
+        SimpleNamespace(type="response.output_text.delta", delta="text"),
+        SimpleNamespace(type="response.completed", response=SimpleNamespace(
+            output=None, model="gpt-5-codex",
+        )),
+    ])
+
+    def _fake_stream(**kwargs):
+        calls["stream"] += 1
+        return _FakeResponsesStream(
+            final_error=RuntimeError("Didn't receive a `response.completed` event.")
+        )
+
+    def _fake_create(**kwargs):
+        calls["create"] += 1
+        assert kwargs.get("stream") is True
+        return create_stream
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=_fake_stream,
+            create=_fake_create,
+        )
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert calls["stream"] == 2
+    assert calls["create"] == 1
+    assert create_stream.closed is True
+    # output=None was backfilled from collected deltas
+    assert response.output[0].type == "message"
+    assert response.output[0].content[0].text == "fallback text"
+    assert response.model == "gpt-5-codex"
